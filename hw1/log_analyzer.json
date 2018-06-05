@@ -1,5 +1,5 @@
 {
     "REPORT_SIZE": 200,
     "SCRIPT_LOG": "log_analyzer.log",
-    "SCRIPT_LOG_LEVEL": "DEBUG"
+    "SCRIPT_LOG_LEVEL": "INFO"
 }
