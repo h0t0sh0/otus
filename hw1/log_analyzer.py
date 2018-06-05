@@ -5,7 +5,6 @@ import re
 import gzip
 import json
 import argparse
-import hashlib
 import logging
 from string import Template
 
@@ -17,51 +16,64 @@ from string import Template
 config = {
     "REPORT_SIZE": 100,
     "REPORT_DIR": "./reports",
-    "LOG_DIR": ("./logs"),
-    "CONFIG_DIR": ".",
+    "LOG_DIR": "./logs",
+    "CONFIG_DEFAULT": "./log_analyzer.json",
     "SCRIPT_LOG": None,
     "SCRIPT_LOG_LEVEL": "INFO",
     "ERRORS_THRESHOLD_%": 10
 }
 
 
+def check_args():
+
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument("--config", type=str,
+                           default=config["CONFIG_DEFAULT"],
+                           help="use specific config with custom settings in json format")
+    return argparser.parse_args()
+
+
 def update_config(config_file, config):
 
-    conf = os.path.join(config["CONFIG_DIR"], config_file)
-    message = ''
-    code = 0
-
-    if not os.path.exists(conf):
+    if config_file != config["CONFIG_DEFAULT"]:
         if not os.path.exists(config_file):
-            message = "ERROR: Can't find config {} ".format(config_file)
-            code = 1
-            return config, code, message
-        else:
-            conf = config_file
+            raise Exception("ERROR: Can't find config {} ".format(config_file))
+    else:
+        raise Exception("INFO: No external config found, using defaults")
 
     external_config = {}
 
     try:
-        with open(conf, 'r') as f:
+        with open(config_file, 'r') as f:
             data = f.read()
     except Exception as e:
-        message = "ERROR: {}: {}".format(conf, e)
-        code = 1
-        return config, code, message
+        raise Exception("ERROR: {}: {}".format(config_file, e))
 
     external_config = json.loads(data)
-
     config.update(external_config)
 
-    return config, code, message
+    return config
 
 
-def get_log_and_report_names(work_dir, report_dir):
+def setup_logger(config):
+    logger = logging.getLogger(__name__)
+    log_format = '[%(asctime)s] %(levelname).1s %(message)s'
+    log_date_format = '%Y.%m.%d %H:%M:%S'
+
+    logging.basicConfig(filename=config["SCRIPT_LOG"],
+                        level=config["SCRIPT_LOG_LEVEL"],
+                        format=log_format,
+                        datefmt=log_date_format)
+
+    return logger
+
+
+def get_log_name(work_dir):
     date_re = re.compile(r"nginx-access-ui.log-(\d+)(.gz|.txt)?$")
     file_name = ''
     file_date = 0
     log_file = ''
-    report_file = ''
+    log_date = ''
 
     for f in os.listdir(work_dir):
         if os.path.isfile(os.path.join(work_dir, f)):
@@ -75,29 +87,8 @@ def get_log_and_report_names(work_dir, report_dir):
     if file_name:
         log_file = os.path.join(work_dir, file_name)
         log_date = re.sub(r'(\d{4})(\d{2})(\d{2})', r'\1.\2.\3', str(file_date))
-        report_file = os.path.join(report_dir,
-                                   'report-{}.html'.format(log_date))
 
-    return log_file, report_file
-
-
-def already_parsed(log_file, report_file):
-
-    if not log_file or not os.path.exists(report_file):
-        return False
-
-    with open(report_file, 'r') as f:
-        f.seek(-42, 2)
-        line = f.readline().split()
-        if line and line[0] == '<!--':
-            hash_string = line[1]
-        else:
-            return False
-
-    m = hashlib.md5()
-    m.update("success" + report_file.encode("utf-8"))
-
-    return m.hexdigest() == hash_string
+    return log_file, log_date
 
 
 def percentage(part, total):
@@ -109,7 +100,7 @@ def parser(file_stream, logger, errors_limit):
     time_total = 0
     records_num = 0
     bad_url = 0
-    parsed_good = True
+
     for line in file_stream:
 
         line = line.decode('utf-8')
@@ -129,13 +120,11 @@ def parser(file_stream, logger, errors_limit):
         result[url] = url_data
         records_num += 1
 
-        if percentage(bad_url, records_num) > errors_limit:
-            logger.error("Parsing error threshold ({}%) reached, exiting now".format(
-                errors_limit))
-            parsed_good = False
-            break
+    if percentage(bad_url, records_num) > errors_limit:
+        logger.error("Parsing error threshold ({}%) reached".format(
+            errors_limit))
 
-    return result, records_num, time_total, parsed_good
+    return result, records_num, time_total
 
 
 def median(lst):
@@ -177,53 +166,10 @@ def generate_report_data(data, records_num, time_total):
     return result_sorted
 
 
-def main(config):
-
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument("--config", type=str,
-                           help="use specific config with custom settings in json format")
-    args = argparser.parse_args()
-
-    if args.config:
-        config, code, message = update_config(args.config, config)
-        if code != 0:
-            print(message)
-            exit(1)
-
-    logger = logging.getLogger(__name__)
-    log_format = '[%(asctime)s] %(levelname).1s %(message)s'
-    log_date_format = '%Y.%m.%d %H:%M:%S'
-
-    logging.basicConfig(filename=config["SCRIPT_LOG"],
-                        level=config["SCRIPT_LOG_LEVEL"],
-                        format=log_format,
-                        datefmt=log_date_format)
-
-    log_file, report_file = get_log_and_report_names(config["LOG_DIR"],
-                                                     config["REPORT_DIR"])
-
-    if already_parsed(log_file, report_file):
-        logger.info("{} already parsed, report file name is: {}".format(
-            log_file, report_file))
-        return
-
-    opener = gzip.open if log_file.endswith(".gz") else open
-
-    with opener(log_file, "r") as log:
-        raw_data, records_num, time_total, parsed_good = parser(
-            log,
-            logger,
-            config["ERRORS_THRESHOLD_%"])
-
-    if not parsed_good:
-        exit(1)
+def write_report(report_data, report_file, config):
 
     with open("report.html", "r") as f:
         report_template = Template(f.read().decode("utf-8"))
-
-    report_data = generate_report_data(raw_data,
-                                       records_num,
-                                       time_total)
 
     report_json = json.dumps(report_data[:config["REPORT_SIZE"]])
     report_template = report_template.substitute(table_json=report_json)
@@ -234,10 +180,45 @@ def main(config):
     with open(report_file, 'w') as f:
         f.write(report_template.encode("utf-8"))
 
-    with open(report_file, 'a') as f:
-        m = hashlib.md5()
-        m.update("success" + report_file)
-        f.write("\n<!-- {} -->\n".format(m.hexdigest()).encode("utf-8"))
+
+def main(config):
+
+    args = check_args()
+
+    if args.config:
+        try:
+            config = update_config(args.config, config)
+        except Exception as e:
+            print(e.message)
+
+    logger = setup_logger(config)
+
+    log_file, report_date = get_log_name(config["LOG_DIR"])
+    report_file = os.path.join(config["REPORT_DIR"],
+                               'report-{}.html'.format(report_date))
+
+    if log_file == '':
+        logger.info("No logs found")
+        exit(0)
+
+    if os.path.exists(report_file):
+        logger.info("{} already parsed, report file name is: {}".format(
+            log_file, report_file))
+        exit(0)
+
+    opener = gzip.open if log_file.endswith(".gz") else open
+
+    with opener(log_file, "r") as log:
+        raw_data, records_num, time_total = parser(
+            log,
+            logger,
+            config["ERRORS_THRESHOLD_%"])
+
+    report_data = generate_report_data(raw_data,
+                                       records_num,
+                                       time_total)
+
+    write_report(report_data, report_file, config)
 
 
 if __name__ == "__main__":

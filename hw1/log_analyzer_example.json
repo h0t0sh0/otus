@@ -1,5 +1,6 @@
 {
     "REPORT_SIZE": 200,
+    "LOG_DIR": "./logs",
     "SCRIPT_LOG": "log_analyzer.log",
     "SCRIPT_LOG_LEVEL": "INFO"
 }
