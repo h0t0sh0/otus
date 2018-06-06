@@ -38,9 +38,8 @@ class LogAnalyzerTest(unittest.TestCase):
         self.assertEqual(config, testresult)
 
         os.remove(config_file)
-        with self.assertRaises(Exception):
-            testresult = log_analyzer.update_config(config_file, config)
-
+        testresult = log_analyzer.update_config(config_file, config)
+        self.assertEqual(config, testresult)
 
     def testGetLastLog(self):
         salt = int(time.mktime(datetime.datetime.now().timetuple()))
@@ -54,22 +53,22 @@ class LogAnalyzerTest(unittest.TestCase):
         for f in files:
             os.system("touch {}".format(os.path.join(work_dir, f)))
 
-        log_file, log_date = log_analyzer.get_log_name(work_dir)
+        log = log_analyzer.get_log_name(work_dir)
 
-        self.assertEqual(os.path.join(work_dir, files[3]), log_file)
-        self.assertEqual(log_date, '2018.07.01')
+        self.assertEqual(os.path.join(work_dir, files[3]), log.log_name)
+        self.assertEqual(log.log_date, '2018.07.01')
 
         os.remove(os.path.join(work_dir, files[3]))
-        log_file, log_date = log_analyzer.get_log_name(work_dir)
+        log = log_analyzer.get_log_name(work_dir)
 
-        self.assertEqual(os.path.join(work_dir, files[2]), log_file)
-        self.assertEqual(log_date, '2018.06.29')
+        self.assertEqual(os.path.join(work_dir, files[2]), log.log_name)
+        self.assertEqual(log.log_date, '2018.06.29')
 
         os.remove(os.path.join(work_dir, files[2]))
-        log_file, log_date = log_analyzer.get_log_name(work_dir)
+        log = log_analyzer.get_log_name(work_dir)
 
-        self.assertEqual(os.path.join(work_dir, files[0]), log_file)
-        self.assertEqual(log_date, '2018.06.01')
+        self.assertEqual(os.path.join(work_dir, files[0]), log.log_name)
+        self.assertEqual(log.log_date, '2018.06.01')
 
         shutil.rmtree(work_dir)
 

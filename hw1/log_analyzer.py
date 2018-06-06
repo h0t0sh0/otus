@@ -7,6 +7,7 @@ import json
 import argparse
 import logging
 from string import Template
+from collections import namedtuple
 
 # log_format ui_short '$remote_addr $remote_user $http_x_real_ip [$time_local] '
 #                     '"$request" $status $body_bytes_sent "$http_referer" '
@@ -24,7 +25,7 @@ config = {
 }
 
 
-def check_args():
+def get_args():
 
     argparser = argparse.ArgumentParser()
     argparser.add_argument("--config", type=str,
@@ -35,19 +36,14 @@ def check_args():
 
 def update_config(config_file, config):
 
-    if config_file != config["CONFIG_DEFAULT"]:
-        if not os.path.exists(config_file):
-            raise Exception("ERROR: Can't find config {} ".format(config_file))
-    else:
-        raise Exception("INFO: No external config found, using defaults")
-
     external_config = {}
 
     try:
         with open(config_file, 'r') as f:
             data = f.read()
     except Exception as e:
-        raise Exception("ERROR: {}: {}".format(config_file, e))
+        print("ERROR: {}: {}".format(config_file, e))
+        return config
 
     external_config = json.loads(data)
     config.update(external_config)
@@ -70,10 +66,12 @@ def setup_logger(config):
 
 def get_log_name(work_dir):
     date_re = re.compile(r"nginx-access-ui.log-(\d+)(.gz|.txt)?$")
+
+    last_log = namedtuple('last_log', ['log_name', 'log_date'])
+    log = last_log('', '')
+
     file_name = ''
     file_date = 0
-    log_file = ''
-    log_date = ''
 
     for f in os.listdir(work_dir):
         if os.path.isfile(os.path.join(work_dir, f)):
@@ -85,10 +83,10 @@ def get_log_name(work_dir):
                     file_date = file_date_tmp
 
     if file_name:
-        log_file = os.path.join(work_dir, file_name)
-        log_date = re.sub(r'(\d{4})(\d{2})(\d{2})', r'\1.\2.\3', str(file_date))
+        log = last_log(os.path.join(work_dir, file_name),
+                       re.sub(r'(\d{4})(\d{2})(\d{2})', r'\1.\2.\3', str(file_date)))
 
-    return log_file, log_date
+    return log
 
 
 def percentage(part, total):
@@ -106,11 +104,18 @@ def parser(file_stream, logger, errors_limit):
         line = line.decode('utf-8')
         line_sp = line.split()
 
+        if len(line_sp) < 7:
+            bad_url += 1
+            records_num += 1
+            continue
+
         url = line_sp[6]
         request_time = line_sp[-1]
 
         if not re.match(r"^(^https?://|/).*", url):
             bad_url += 1
+            records_num += 1
+            continue
 
         url_data = result.get(url, {"count": 0, "timings": []})
         url_data["count"] += 1
@@ -171,7 +176,7 @@ def write_report(report_data, report_file, config):
     with open("report.html", "r") as f:
         report_template = Template(f.read().decode("utf-8"))
 
-    report_json = json.dumps(report_data[:config["REPORT_SIZE"]])
+    report_json = json.dumps(report_data)
     report_template = report_template.substitute(table_json=report_json)
 
     if not os.path.exists(config["REPORT_DIR"]):
@@ -183,32 +188,29 @@ def write_report(report_data, report_file, config):
 
 def main(config):
 
-    args = check_args()
+    args = get_args()
 
     if args.config:
-        try:
-            config = update_config(args.config, config)
-        except Exception as e:
-            print(e.message)
+        config = update_config(args.config, config)
 
     logger = setup_logger(config)
 
-    log_file, report_date = get_log_name(config["LOG_DIR"])
+    log = get_log_name(config["LOG_DIR"])
     report_file = os.path.join(config["REPORT_DIR"],
-                               'report-{}.html'.format(report_date))
+                               'report-{}.html'.format(log.log_date))
 
-    if log_file == '':
+    if not log.log_name:
         logger.info("No logs found")
         exit(0)
 
     if os.path.exists(report_file):
         logger.info("{} already parsed, report file name is: {}".format(
-            log_file, report_file))
+            log.log_name, report_file))
         exit(0)
 
-    opener = gzip.open if log_file.endswith(".gz") else open
+    opener = gzip.open if log.log_name.endswith(".gz") else open
 
-    with opener(log_file, "r") as log:
+    with opener(log.log_name, "r") as log:
         raw_data, records_num, time_total = parser(
             log,
             logger,
@@ -218,7 +220,9 @@ def main(config):
                                        records_num,
                                        time_total)
 
-    write_report(report_data, report_file, config)
+    write_report(report_data[:config["REPORT_SIZE"]],
+                 report_file,
+                 config)
 
 
 if __name__ == "__main__":
