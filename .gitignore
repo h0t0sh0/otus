@@ -3,6 +3,7 @@
 
 # Project specific
 log_analyzer.log
+reports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
